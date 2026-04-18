@@ -14,6 +14,7 @@ namespace audio_sdk {
 struct PipeWireDeviceEvent {
     EventType type = EventType::kDeviceAdded;
     DeviceDescriptor device;
+    std::vector<DeviceDescriptor> devices;
 };
 
 class PipeWireBackend {

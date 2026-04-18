@@ -498,7 +498,7 @@ class PipeWireBackend::RegistrySession {
             return;
         }
 
-        self->callback_(PipeWireDeviceEvent{EventType::kDeviceAdded, device});
+        self->callback_(PipeWireDeviceEvent{EventType::kDeviceAdded, device, SortedDevices(self->devices_)});
     }
 
     static void OnRegistryGlobalRemove(void* data, uint32_t id) {
@@ -515,7 +515,7 @@ class PipeWireBackend::RegistrySession {
             return;
         }
 
-        self->callback_(PipeWireDeviceEvent{EventType::kDeviceRemoved, removed_device});
+        self->callback_(PipeWireDeviceEvent{EventType::kDeviceRemoved, removed_device, SortedDevices(self->devices_)});
     }
 
     pw_thread_loop* loop_ = nullptr;

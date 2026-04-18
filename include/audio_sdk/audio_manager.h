@@ -13,6 +13,7 @@
 namespace audio_sdk {
 
 class PipeWireBackend;
+struct PipeWireDeviceEvent;
 
 class AudioManager {
   public:
@@ -41,13 +42,24 @@ class AudioManager {
     const AudioConfig& config() const { return config_; }
 
   private:
+    Status EnsureMonitoring();
+    Status ResolveTargetDevice(DeviceDirection direction, std::string& device_id, std::string& device_name, bool& used_fallback);
+    void HandleBackendDeviceEvent(const PipeWireDeviceEvent& event);
+    void HandleDeviceRemoval(DeviceDirection direction, const PipeWireDeviceEvent& event);
     void Emit(EventType type, std::string device_id, std::string details) const;
 
     AudioConfig config_;
     bool recording_active_ = false;
+    bool playback_active_ = false;
     std::string active_recording_path_;
+    std::string active_recording_device_id_;
+    std::string active_playback_device_id_;
+    std::string selected_input_device_id_;
+    std::string selected_output_device_id_;
     EventCallback callback_;
     std::unique_ptr<PipeWireBackend> backend_;
+    bool monitoring_started_ = false;
+    mutable std::mutex state_mutex_;
     mutable std::mutex callback_mutex_;
 };
 

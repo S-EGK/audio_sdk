@@ -44,6 +44,32 @@ ctest --output-on-failure
 
 Python bindings are built only when both `Python3` and `pybind11` are installed.
 
+## Git Workflow
+
+- Keep `main` as the stable integration branch.
+- Do feature work on `feature/<topic>` branches such as `feature/live-stream-sessions`.
+- Use short imperative commit subjects such as `Add active stream fallback policy`.
+- Tag releases from `main` with annotated semantic versions such as `v0.1.0` or `v0.1.1`.
+
+Typical flow:
+
+```bash
+git checkout main
+git pull
+git checkout -b feature/live-stream-sessions
+# work, test, commit
+git push -u origin feature/live-stream-sessions
+```
+
+Release flow:
+
+```bash
+git checkout main
+git pull
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
 ## Recommended Direction
 
 - Use PipeWire for real-time graph and strict-sync stream work.

@@ -12,18 +12,22 @@ int main() {
     namespace fs = std::filesystem;
 
     std::cout << "Running PipeWire HIL record/playback validation\n";
-    audio_sdk::AudioManager manager;
+    audio_sdk::AudioManager discovery_manager;
 
-    const auto devices = manager.EnumerateDevices();
+    const auto devices = discovery_manager.EnumerateDevices();
 
     std::string input_id;
+    std::string input_name;
     std::string output_id;
+    std::string output_name;
     for (const auto& device : devices) {
         if (device.direction == audio_sdk::DeviceDirection::kInput && input_id.empty()) {
             input_id = device.id;
+            input_name = device.name;
         }
         if (device.direction == audio_sdk::DeviceDirection::kOutput && output_id.empty()) {
             output_id = device.id;
+            output_name = device.name;
         }
     }
 
@@ -32,8 +36,10 @@ int main() {
         return 1;
     }
 
-    assert(manager.SelectInputDevice(input_id));
-    assert(manager.SelectOutputDevice(output_id));
+    audio_sdk::AudioConfig config;
+    config.input.preferred_name = input_name;
+    config.output.preferred_name = output_name;
+    audio_sdk::AudioManager manager(config);
 
     const fs::path temp_root = fs::temp_directory_path() / ("audio_sdk_hil_" + std::to_string(getpid()));
     const fs::path wav_path = temp_root / "hil.wav";
