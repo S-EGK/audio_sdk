@@ -47,6 +47,18 @@ int main() {
     assert(manager.config().output.preferred_id == "manual-output-id");
     assert(manager.config().output.preferred_name.empty());
 
+    auto recording_session = manager.CreateRecordingSession("recordings/unit_recording.wav");
+    assert(recording_session);
+    assert(recording_session->mode() == audio_sdk::AudioSessionMode::kRecording);
+    assert(recording_session->path() == "recordings/unit_recording.wav");
+    assert(!recording_session->active());
+
+    auto playback_session = manager.CreatePlaybackSession("recordings/unit_playback.wav");
+    assert(playback_session);
+    assert(playback_session->mode() == audio_sdk::AudioSessionMode::kPlayback);
+    assert(playback_session->path() == "recordings/unit_playback.wav");
+    assert(!playback_session->active());
+
     const auto devices = loaded_manager.EnumerateDevices();
     for (const auto& device : devices) {
         assert(!device.id.empty());

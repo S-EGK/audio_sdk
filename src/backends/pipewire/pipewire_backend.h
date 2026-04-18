@@ -31,15 +31,20 @@ class PipeWireBackend {
     void StopMonitoring();
     Status StartRecording(const std::string& path, const std::string& target_device_id, const StreamPolicy& policy);
     Status StopRecording();
+    Status StartPlayback(const std::string& path, const std::string& target_device_id);
+    Status WaitForPlaybackToFinish();
+    Status StopPlayback();
     Status PlayRecording(const std::string& path, const std::string& target_device_id);
 
   private:
     class RegistrySession;
     class RecordingSession;
+    class PlaybackSession;
 
     std::function<void(const PipeWireDeviceEvent&)> callback_;
     RegistrySession* monitor_ = nullptr;
     RecordingSession* recorder_ = nullptr;
+    PlaybackSession* player_ = nullptr;
 };
 
 }  // namespace audio_sdk

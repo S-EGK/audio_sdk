@@ -51,13 +51,22 @@ int main() {
                   << " details=" << event.details << '\n';
     });
 
-    assert(manager.StartRecording(wav_path.string()));
+    auto recording_session = manager.CreateRecordingSession(wav_path.string());
+    assert(recording_session);
+    assert(recording_session->Start());
+    assert(recording_session->active());
     std::this_thread::sleep_for(std::chrono::seconds(2));
-    assert(manager.StopRecording());
+    assert(recording_session->Stop());
+    assert(!recording_session->active());
     assert(fs::exists(wav_path));
     assert(fs::file_size(wav_path) > 44);
 
-    assert(manager.PlayRecording(wav_path.string()));
+    auto playback_session = manager.CreatePlaybackSession(wav_path.string());
+    assert(playback_session);
+    assert(playback_session->Start());
+    while (playback_session->active()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
     assert(manager.DeleteRecording(wav_path.string()));
     assert(!fs::exists(wav_path));
 

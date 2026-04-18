@@ -16,6 +16,7 @@ pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
 add_library(audio_sdk
     src/audio_manager.cpp
+    src/audio_session.cpp
     src/config.cpp
     src/backends/pipewire/pipewire_backend.cpp
 )
@@ -78,4 +79,3 @@ if(AUDIO_SDK_BUILD_PYTHON)
         message(STATUS "Python bindings disabled: Python3 and/or pybind11 not found")
     endif()
 endif()
-

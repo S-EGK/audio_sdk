@@ -18,7 +18,7 @@ This repository is at bootstrap stage. The initial scaffold focuses on:
 - a record / stop / play / delete lifecycle stub
 - local build and smoke-test wiring
 
-The current implementation now covers real PipeWire-backed device discovery, event monitoring, WAV recording, playback, and deletion. Fallback policy, richer routing, and stricter synchronization controls still need to be built out.
+The current implementation now covers real PipeWire-backed device discovery, event monitoring, config-driven routing, fallback policy selection, session-based WAV recording and playback, and recording deletion. Active-stream recovery, forwarding, richer routing, and stricter synchronization controls still need to be built out.
 
 ## Repository Layout
 
@@ -79,7 +79,7 @@ git push origin v0.1.0
 
 ## Near-Term Roadmap
 
-1. Add config-driven device fallback and hot-plug recovery behavior.
-2. Expand routing and live-stream session control beyond record/playback.
+1. Rebind active streams to fallback devices instead of only updating future route choices.
+2. Add forwarding and fuller live-stream control beyond file-backed record/playback.
 3. Replace the temporary JSON parser with a proper JSON dependency.
 4. Add deeper hardware-assisted validation on Ubuntu 22.04.

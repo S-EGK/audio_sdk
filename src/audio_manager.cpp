@@ -116,11 +116,17 @@ std::string DirectionLabel(DeviceDirection direction) {
 
 AudioManager::AudioManager(AudioConfig config)
     : config_(std::move(config)),
-      backend_(std::make_unique<PipeWireBackend>()) {
+      backend_(std::make_unique<PipeWireBackend>()),
+      alive_(std::make_shared<std::atomic_bool>(true)) {
     static_cast<void>(EnsureMonitoring());
 }
 
 AudioManager::~AudioManager() {
+    if (alive_) {
+        alive_->store(false);
+    }
+    static_cast<void>(StopPlaybackSession(false));
+    JoinPlaybackWatcher();
     if (backend_) {
         backend_->StopMonitoring();
     }
@@ -250,6 +256,14 @@ Status AudioManager::StopRecording() {
 }
 
 Status AudioManager::PlayRecording(const std::string& path) {
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (playback_active_) {
+            return Status::Error("Playback is already active");
+        }
+    }
+    JoinPlaybackWatcher();
+
     std::string target_device_id;
     std::string target_device_name;
     bool used_fallback = false;
@@ -275,22 +289,44 @@ Status AudioManager::PlayRecording(const std::string& path) {
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
+        if (playback_active_) {
+            return Status::Error("Playback is already active");
+        }
         playback_active_ = true;
+        active_playback_path_ = path;
         active_playback_device_id_ = target_device_id;
     }
 
     Emit(EventType::kStreamStarted, target_device_id, "Playback started on " + target_device_name);
-    status = backend_->PlayRecording(path, target_device_id);
+    status = backend_->StartPlayback(path, target_device_id);
+    if (!status) {
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            playback_active_ = false;
+            active_playback_path_.clear();
+            active_playback_device_id_.clear();
+        }
+        Emit(EventType::kStreamError, target_device_id, status.message);
+        return status;
+    }
+
+    status = backend_->WaitForPlaybackToFinish();
+    const Status stop_status = backend_->StopPlayback();
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         playback_active_ = false;
+        active_playback_path_.clear();
         active_playback_device_id_.clear();
     }
 
     if (!status) {
         Emit(EventType::kStreamError, target_device_id, status.message);
         return status;
+    }
+    if (!stop_status) {
+        Emit(EventType::kStreamError, target_device_id, stop_status.message);
+        return stop_status;
     }
 
     Emit(EventType::kStreamStopped, target_device_id, "Playback stopped");
@@ -305,6 +341,56 @@ Status AudioManager::DeleteRecording(const std::string& path) {
     std::filesystem::remove(path);
     Emit(EventType::kRecordingDeleted, {}, path);
     return Status::Ok();
+}
+
+std::unique_ptr<AudioSession> AudioManager::CreateRecordingSession(const std::string& path) {
+    const auto alive = alive_;
+    return std::unique_ptr<AudioSession>(new AudioSession(
+        AudioSessionMode::kRecording,
+        path,
+        [this, alive, path]() {
+            if (!alive || !alive->load()) {
+                return Status::Error("AudioManager is no longer available");
+            }
+            return StartRecording(path);
+        },
+        [this, alive]() {
+            if (!alive || !alive->load()) {
+                return Status::Error("AudioManager is no longer available");
+            }
+            return StopRecording();
+        },
+        [this, alive, path]() {
+            if (!alive || !alive->load()) {
+                return false;
+            }
+            return IsRecordingSessionActive(path);
+        }));
+}
+
+std::unique_ptr<AudioSession> AudioManager::CreatePlaybackSession(const std::string& path) {
+    const auto alive = alive_;
+    return std::unique_ptr<AudioSession>(new AudioSession(
+        AudioSessionMode::kPlayback,
+        path,
+        [this, alive, path]() {
+            if (!alive || !alive->load()) {
+                return Status::Error("AudioManager is no longer available");
+            }
+            return StartPlaybackSession(path);
+        },
+        [this, alive]() {
+            if (!alive || !alive->load()) {
+                return Status::Error("AudioManager is no longer available");
+            }
+            return StopPlaybackSession();
+        },
+        [this, alive, path]() {
+            if (!alive || !alive->load()) {
+                return false;
+            }
+            return IsPlaybackSessionActive(path);
+        }));
 }
 
 void AudioManager::SetEventCallback(EventCallback callback) {
@@ -383,6 +469,135 @@ Status AudioManager::ResolveTargetDevice(
             "Resolved " + DirectionLabel(direction) + " route to " + choice.device.name);
     }
     return Status::Ok();
+}
+
+Status AudioManager::StartPlaybackSession(const std::string& path) {
+    std::string target_device_id;
+    std::string target_device_name;
+    bool used_fallback = false;
+
+    if (!std::filesystem::exists(path)) {
+        return Status::Error("Recording file does not exist: " + path);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (playback_active_) {
+            return Status::Error("Playback is already active");
+        }
+    }
+    JoinPlaybackWatcher();
+
+    static_cast<void>(EnsureMonitoring());
+
+    Status status = ResolveTargetDevice(DeviceDirection::kOutput, target_device_id, target_device_name, used_fallback);
+    if (!status) {
+        Emit(EventType::kStreamError, {}, status.message);
+        return status;
+    }
+
+    if (used_fallback) {
+        Emit(
+            EventType::kStreamFallbackApplied,
+            target_device_id,
+            "Playback fell back to " + target_device_name);
+    }
+
+    status = backend_->StartPlayback(path, target_device_id);
+    if (!status) {
+        Emit(EventType::kStreamError, target_device_id, status.message);
+        return status;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        playback_active_ = true;
+        active_playback_path_ = path;
+        active_playback_device_id_ = target_device_id;
+    }
+
+    Emit(EventType::kStreamStarted, target_device_id, "Playback started on " + target_device_name);
+
+    playback_watcher_ = std::thread([this, path, target_device_id]() {
+        const Status wait_status = backend_->WaitForPlaybackToFinish();
+
+        bool emit_stop = false;
+        bool emit_error = false;
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (playback_active_ &&
+                active_playback_path_ == path &&
+                active_playback_device_id_ == target_device_id) {
+                playback_active_ = false;
+                active_playback_path_.clear();
+                active_playback_device_id_.clear();
+                emit_stop = wait_status.ok;
+                emit_error = !wait_status.ok;
+            }
+        }
+
+        static_cast<void>(backend_->StopPlayback());
+
+        if (emit_error) {
+            Emit(EventType::kStreamError, target_device_id, wait_status.message);
+            return;
+        }
+        if (emit_stop) {
+            Emit(EventType::kStreamStopped, target_device_id, "Playback stopped");
+        }
+    });
+
+    return Status::Ok();
+}
+
+Status AudioManager::StopPlaybackSession(bool emit_event) {
+    std::string device_id;
+    bool was_active = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        was_active = playback_active_;
+        if (playback_active_) {
+            playback_active_ = false;
+            active_playback_path_.clear();
+            device_id = active_playback_device_id_;
+            active_playback_device_id_.clear();
+        }
+    }
+
+    if (!was_active) {
+        JoinPlaybackWatcher();
+        return Status::Error("Playback is not active");
+    }
+
+    const Status status = backend_->StopPlayback();
+    JoinPlaybackWatcher();
+    if (!status) {
+        if (emit_event) {
+            Emit(EventType::kStreamError, device_id, status.message);
+        }
+        return status;
+    }
+
+    if (emit_event) {
+        Emit(EventType::kStreamStopped, device_id, "Playback stopped");
+    }
+    return Status::Ok();
+}
+
+void AudioManager::JoinPlaybackWatcher() {
+    if (playback_watcher_.joinable()) {
+        playback_watcher_.join();
+    }
+}
+
+bool AudioManager::IsRecordingSessionActive(const std::string& path) const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return recording_active_ && active_recording_path_ == path;
+}
+
+bool AudioManager::IsPlaybackSessionActive(const std::string& path) const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return playback_active_ && active_playback_path_ == path;
 }
 
 void AudioManager::HandleBackendDeviceEvent(const PipeWireDeviceEvent& event) {

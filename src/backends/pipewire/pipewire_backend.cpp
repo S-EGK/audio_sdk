@@ -751,9 +751,17 @@ const pw_stream_events PipeWireBackend::RecordingSession::kStreamEvents = {
     nullptr,
 };
 
-class PlaybackSession {
+class PipeWireBackend::PlaybackSession {
   public:
-    Status Play(const std::string& path, const std::string& target_device_id) {
+    ~PlaybackSession() {
+        Stop();
+    }
+
+    Status Start(const std::string& path, const std::string& target_device_id) {
+        if (loop_ != nullptr) {
+            return Status::Error("Playback session is already active");
+        }
+
         Status status = ParseWavFile(path, wav_info_);
         if (!status) {
             return status;
@@ -819,11 +827,43 @@ class PlaybackSession {
             pw_thread_loop_wait(loop_);
         }
 
-        while (error_message_.empty() && !drained_) {
-            pw_thread_loop_wait(loop_);
+        const std::string error_message = error_message_;
+        pw_thread_loop_unlock(loop_);
+
+        if (!error_message.empty()) {
+            Stop();
+            return Status::Error(error_message);
+        }
+        return Status::Ok();
+    }
+
+    Status WaitUntilFinished() {
+        if (loop_ == nullptr) {
+            return Status::Error("Playback session is not active");
         }
 
+        pw_thread_loop_lock(loop_);
+        while (error_message_.empty() && !finished_) {
+            pw_thread_loop_wait(loop_);
+        }
         const std::string error_message = error_message_;
+        pw_thread_loop_unlock(loop_);
+
+        if (!error_message.empty()) {
+            return Status::Error(error_message);
+        }
+        return Status::Ok();
+    }
+
+    Status Stop() {
+        if (loop_ == nullptr) {
+            return Status::Error("Playback session is not active");
+        }
+
+        pw_thread_loop_lock(loop_);
+        stop_requested_ = true;
+        finished_ = true;
+        pw_thread_loop_signal(loop_, false);
         TeardownLocked();
         pw_thread_loop_unlock(loop_);
 
@@ -832,15 +872,14 @@ class PlaybackSession {
         loop_ = nullptr;
         input_.close();
 
-        if (!error_message.empty()) {
-            return Status::Error(error_message);
-        }
         return Status::Ok();
     }
 
   private:
     Status FailLocked(const std::string& message) {
         error_message_ = message;
+        finished_ = true;
+        pw_thread_loop_signal(loop_, false);
         TeardownLocked();
         pw_thread_loop_unlock(loop_);
         pw_thread_loop_stop(loop_);
@@ -862,7 +901,7 @@ class PlaybackSession {
 
     static void OnStateChanged(void* data, pw_stream_state old_state, pw_stream_state state, const char* error) {
         static_cast<void>(old_state);
-        auto* self = static_cast<PlaybackSession*>(data);
+        auto* self = static_cast<PipeWireBackend::PlaybackSession*>(data);
         if (state == PW_STREAM_STATE_PAUSED || state == PW_STREAM_STATE_STREAMING) {
             self->ready_ = true;
             pw_thread_loop_signal(self->loop_, false);
@@ -871,13 +910,14 @@ class PlaybackSession {
         if (state == PW_STREAM_STATE_ERROR) {
             self->error_message_ = error == nullptr ? "PipeWire playback stream failed" : error;
             self->ready_ = true;
+            self->finished_ = true;
             pw_thread_loop_signal(self->loop_, false);
         }
     }
 
     static void OnProcess(void* data) {
-        auto* self = static_cast<PlaybackSession*>(data);
-        if (self->stream_ == nullptr || self->drain_requested_) {
+        auto* self = static_cast<PipeWireBackend::PlaybackSession*>(data);
+        if (self->stream_ == nullptr || self->drain_requested_ || self->stop_requested_) {
             return;
         }
 
@@ -928,8 +968,8 @@ class PlaybackSession {
     }
 
     static void OnDrained(void* data) {
-        auto* self = static_cast<PlaybackSession*>(data);
-        self->drained_ = true;
+        auto* self = static_cast<PipeWireBackend::PlaybackSession*>(data);
+        self->finished_ = true;
         pw_thread_loop_signal(self->loop_, false);
     }
 
@@ -941,22 +981,23 @@ class PlaybackSession {
     WavFileInfo wav_info_;
     std::uint32_t bytes_remaining_ = 0;
     bool ready_ = false;
+    bool stop_requested_ = false;
     bool drain_requested_ = false;
-    bool drained_ = false;
+    bool finished_ = false;
     std::string error_message_;
 };
 
-const pw_stream_events PlaybackSession::kStreamEvents = {
+const pw_stream_events PipeWireBackend::PlaybackSession::kStreamEvents = {
     PW_VERSION_STREAM_EVENTS,
     nullptr,
-    &PlaybackSession::OnStateChanged,
+    &PipeWireBackend::PlaybackSession::OnStateChanged,
     nullptr,
     nullptr,
     nullptr,
     nullptr,
     nullptr,
-    &PlaybackSession::OnProcess,
-    &PlaybackSession::OnDrained,
+    &PipeWireBackend::PlaybackSession::OnProcess,
+    &PipeWireBackend::PlaybackSession::OnDrained,
 };
 
 PipeWireBackend::PipeWireBackend() {
@@ -970,6 +1011,11 @@ PipeWireBackend::~PipeWireBackend() {
         recorder_->Stop();
         delete recorder_;
         recorder_ = nullptr;
+    }
+    if (player_ != nullptr) {
+        player_->Stop();
+        delete player_;
+        player_ = nullptr;
     }
     StopMonitoring();
 }
@@ -1047,9 +1093,52 @@ Status PipeWireBackend::StopRecording() {
     return status;
 }
 
+Status PipeWireBackend::StartPlayback(const std::string& path, const std::string& target_device_id) {
+    if (player_ != nullptr) {
+        return Status::Error("Playback session is already active");
+    }
+
+    auto session = std::make_unique<PlaybackSession>();
+    const Status status = session->Start(path, target_device_id);
+    if (!status) {
+        return status;
+    }
+
+    player_ = session.release();
+    return Status::Ok();
+}
+
+Status PipeWireBackend::WaitForPlaybackToFinish() {
+    if (player_ == nullptr) {
+        return Status::Error("Playback session is not active");
+    }
+
+    return player_->WaitUntilFinished();
+}
+
+Status PipeWireBackend::StopPlayback() {
+    if (player_ == nullptr) {
+        return Status::Error("Playback session is not active");
+    }
+
+    const Status status = player_->Stop();
+    delete player_;
+    player_ = nullptr;
+    return status;
+}
+
 Status PipeWireBackend::PlayRecording(const std::string& path, const std::string& target_device_id) {
-    PlaybackSession session;
-    return session.Play(path, target_device_id);
+    const Status start_status = StartPlayback(path, target_device_id);
+    if (!start_status) {
+        return start_status;
+    }
+
+    const Status wait_status = WaitForPlaybackToFinish();
+    const Status stop_status = StopPlayback();
+    if (!wait_status) {
+        return wait_status;
+    }
+    return stop_status;
 }
 
 }  // namespace audio_sdk
