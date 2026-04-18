@@ -18,7 +18,7 @@ This repository is at bootstrap stage. The initial scaffold focuses on:
 - a record / stop / play / delete lifecycle stub
 - local build and smoke-test wiring
 
-The current implementation is intentionally thin. It compiles and exercises the expected control flow, but it does not yet perform full real-time capture/playback through PipeWire.
+The current implementation now covers real PipeWire-backed device discovery, event monitoring, WAV recording, playback, and deletion. Fallback policy, richer routing, and stricter synchronization controls still need to be built out.
 
 ## Repository Layout
 
@@ -35,9 +35,11 @@ The current implementation is intentionally thin. It compiles and exercises the 
 ## Build
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-make -C build -j
-ctest --test-dir build --output-on-failure
+mkdir build
+cd build
+cmake ..
+make
+ctest --output-on-failure
 ```
 
 Python bindings are built only when both `Python3` and `pybind11` are installed.
@@ -51,8 +53,7 @@ Python bindings are built only when both `Python3` and `pybind11` are installed.
 
 ## Near-Term Roadmap
 
-1. Implement real device enumeration and event subscriptions through PipeWire.
-2. Replace the recording/playback stub with real stream graph handling.
-3. Add per-application config overlays and richer routing policy.
-4. Add GoogleTest and hardware-assisted validation on Ubuntu 22.04.
-
+1. Add config-driven device fallback and hot-plug recovery behavior.
+2. Expand routing and live-stream session control beyond record/playback.
+3. Replace the temporary JSON parser with a proper JSON dependency.
+4. Add deeper hardware-assisted validation on Ubuntu 22.04.

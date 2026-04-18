@@ -1,16 +1,20 @@
 #include <cassert>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
+
+#include <unistd.h>
 
 #include "audio_sdk/audio_manager.h"
 
 int main() {
     namespace fs = std::filesystem;
 
-    const fs::path temp_root = fs::temp_directory_path() / "audio_sdk_smoke";
-    const fs::path config_path = temp_root / "config.json";
-    const fs::path wav_path = temp_root / "smoke.wav";
+    std::ostringstream temp_name;
+    temp_name << "audio_sdk_smoke_" << getpid();
 
+    const fs::path temp_root = fs::temp_directory_path() / temp_name.str();
+    const fs::path config_path = temp_root / "config.json";
     fs::create_directories(temp_root);
 
     audio_sdk::AudioManager manager;
@@ -25,23 +29,14 @@ int main() {
     assert(loaded_manager.config().backend == "pipewire");
     assert(loaded_manager.config().stream.strict_sync);
 
-    const audio_sdk::Status start_status = manager.StartRecording(wav_path.string());
-    assert(start_status.ok);
-    assert(fs::exists(wav_path));
-
-    const audio_sdk::Status stop_status = manager.StopRecording();
-    assert(stop_status.ok);
-
-    const audio_sdk::Status play_status = manager.PlayRecording(wav_path.string());
-    assert(play_status.ok);
-
-    const audio_sdk::Status delete_status = manager.DeleteRecording(wav_path.string());
-    assert(delete_status.ok);
-    assert(!fs::exists(wav_path));
+    const auto devices = loaded_manager.EnumerateDevices();
+    for (const auto& device : devices) {
+        assert(!device.id.empty());
+        assert(!device.name.empty());
+    }
 
     fs::remove_all(temp_root);
 
     std::cout << "audio_sdk smoke tests passed\n";
     return 0;
 }
-

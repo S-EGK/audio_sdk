@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -10,9 +12,15 @@
 
 namespace audio_sdk {
 
+class PipeWireBackend;
+
 class AudioManager {
   public:
     explicit AudioManager(AudioConfig config = {});
+    ~AudioManager();
+
+    AudioManager(const AudioManager&) = delete;
+    AudioManager& operator=(const AudioManager&) = delete;
 
     Status LoadConfigFromFile(const std::string& path);
     Status SaveConfigToFile(const std::string& path) const;
@@ -39,7 +47,8 @@ class AudioManager {
     bool recording_active_ = false;
     std::string active_recording_path_;
     EventCallback callback_;
+    std::unique_ptr<PipeWireBackend> backend_;
+    mutable std::mutex callback_mutex_;
 };
 
 }  // namespace audio_sdk
-

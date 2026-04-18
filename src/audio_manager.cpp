@@ -1,65 +1,21 @@
 #include "audio_sdk/audio_manager.h"
 
-#include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <utility>
 
 #include "backends/pipewire/pipewire_backend.h"
 
 namespace audio_sdk {
 
-namespace {
-
-void WriteLittleEndian(std::ofstream& output, std::uint32_t value) {
-    output.put(static_cast<char>(value & 0xFF));
-    output.put(static_cast<char>((value >> 8) & 0xFF));
-    output.put(static_cast<char>((value >> 16) & 0xFF));
-    output.put(static_cast<char>((value >> 24) & 0xFF));
-}
-
-void WriteLittleEndian16(std::ofstream& output, std::uint16_t value) {
-    output.put(static_cast<char>(value & 0xFF));
-    output.put(static_cast<char>((value >> 8) & 0xFF));
-}
-
-Status WriteEmptyWav(const std::string& path, int sample_rate, int channels) {
-    const std::filesystem::path file_path(path);
-    if (!file_path.parent_path().empty()) {
-        std::filesystem::create_directories(file_path.parent_path());
-    }
-
-    std::ofstream output(path, std::ios::binary);
-    if (!output) {
-        return Status::Error("Failed to create WAV file: " + path);
-    }
-
-    constexpr std::uint16_t bits_per_sample = 16;
-    const std::uint32_t data_size = 0;
-    const std::uint32_t byte_rate = static_cast<std::uint32_t>(sample_rate * channels * bits_per_sample / 8);
-    const std::uint16_t block_align = static_cast<std::uint16_t>(channels * bits_per_sample / 8);
-
-    output.write("RIFF", 4);
-    WriteLittleEndian(output, 36 + data_size);
-    output.write("WAVE", 4);
-    output.write("fmt ", 4);
-    WriteLittleEndian(output, 16);
-    WriteLittleEndian16(output, 1);
-    WriteLittleEndian16(output, static_cast<std::uint16_t>(channels));
-    WriteLittleEndian(output, static_cast<std::uint32_t>(sample_rate));
-    WriteLittleEndian(output, byte_rate);
-    WriteLittleEndian16(output, block_align);
-    WriteLittleEndian16(output, bits_per_sample);
-    output.write("data", 4);
-    WriteLittleEndian(output, data_size);
-
-    return Status::Ok();
-}
-
-}  // namespace
-
 AudioManager::AudioManager(AudioConfig config)
-    : config_(std::move(config)) {}
+    : config_(std::move(config)),
+      backend_(std::make_unique<PipeWireBackend>()) {}
+
+AudioManager::~AudioManager() {
+    if (backend_) {
+        backend_->StopMonitoring();
+    }
+}
 
 Status AudioManager::LoadConfigFromFile(const std::string& path) {
     return LoadConfig(path, config_);
@@ -70,13 +26,11 @@ Status AudioManager::SaveConfigToFile(const std::string& path) const {
 }
 
 std::string AudioManager::BackendName() const {
-    PipeWireBackend backend;
-    return backend.Name();
+    return backend_->Name();
 }
 
 std::vector<DeviceDescriptor> AudioManager::EnumerateDevices() const {
-    PipeWireBackend backend;
-    return backend.EnumerateDevices();
+    return backend_->EnumerateDevices();
 }
 
 Status AudioManager::SelectInputDevice(const std::string& device_id) {
@@ -96,7 +50,7 @@ Status AudioManager::StartRecording(const std::string& path) {
         return Status::Error("Recording is already active");
     }
 
-    Status status = WriteEmptyWav(path, config_.stream.sample_rate, config_.stream.channels);
+    Status status = backend_->StartRecording(path, config_.input.preferred_id, config_.stream);
     if (!status) {
         Emit(EventType::kStreamError, config_.input.preferred_id, status.message);
         return status;
@@ -113,6 +67,12 @@ Status AudioManager::StopRecording() {
         return Status::Error("Recording is not active");
     }
 
+    const Status status = backend_->StopRecording();
+    if (!status) {
+        Emit(EventType::kStreamError, config_.input.preferred_id, status.message);
+        return status;
+    }
+
     recording_active_ = false;
     Emit(EventType::kRecordingSaved, config_.input.preferred_id, active_recording_path_);
     Emit(EventType::kStreamStopped, config_.input.preferred_id, "Recording stopped");
@@ -125,6 +85,12 @@ Status AudioManager::PlayRecording(const std::string& path) {
     }
 
     Emit(EventType::kStreamStarted, config_.output.preferred_id, "Playback started");
+    const Status status = backend_->PlayRecording(path, config_.output.preferred_id);
+    if (!status) {
+        Emit(EventType::kStreamError, config_.output.preferred_id, status.message);
+        return status;
+    }
+
     Emit(EventType::kStreamStopped, config_.output.preferred_id, "Playback stopped");
     return Status::Ok();
 }
@@ -140,15 +106,42 @@ Status AudioManager::DeleteRecording(const std::string& path) {
 }
 
 void AudioManager::SetEventCallback(EventCallback callback) {
-    callback_ = std::move(callback);
-}
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        callback_ = std::move(callback);
+    }
 
-void AudioManager::Emit(EventType type, std::string device_id, std::string details) const {
-    if (!callback_) {
+    if (!backend_) {
         return;
     }
 
-    callback_(Event{type, std::move(device_id), std::move(details)});
+    if (!callback_) {
+        backend_->StopMonitoring();
+        return;
+    }
+
+    const Status status = backend_->StartMonitoring([this](const PipeWireDeviceEvent& event) {
+        const std::string details = event.device.name.empty() ? event.device.id : event.device.name;
+        Emit(event.type, event.device.id, details);
+    });
+
+    if (!status) {
+        Emit(EventType::kStreamError, {}, status.message);
+    }
+}
+
+void AudioManager::Emit(EventType type, std::string device_id, std::string details) const {
+    EventCallback callback_copy;
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        callback_copy = callback_;
+    }
+
+    if (!callback_copy) {
+        return;
+    }
+
+    callback_copy(Event{type, std::move(device_id), std::move(details)});
 }
 
 }  // namespace audio_sdk

@@ -1,4 +1,6 @@
+#include <chrono>
 #include <iostream>
+#include <thread>
 
 #include "audio_sdk/audio_manager.h"
 
@@ -18,6 +20,8 @@ int main() {
         return 1;
     }
 
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
     if (!manager.StopRecording()) {
         std::cerr << "Failed to stop recording\n";
         return 1;
@@ -28,7 +32,6 @@ int main() {
         return 1;
     }
 
-    std::cout << "Demo completed with placeholder WAV output at " << path << '\n';
+    std::cout << "Demo completed with recorded WAV output at " << path << '\n';
     return 0;
 }
-
