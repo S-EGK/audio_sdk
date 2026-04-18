@@ -1,0 +1,17 @@
+build/
+dist/
+out/
+.codex
+*.o
+*.obj
+*.so
+*.a
+*.pyc
+__pycache__/
+.pytest_cache/
+.venv/
+.idea/
+.vscode/
+compile_commands.json
+recordings/
+*.wav

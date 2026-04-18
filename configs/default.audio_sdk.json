@@ -1,0 +1,17 @@
+{
+  "backend": "pipewire",
+  "input_preferred_id": "",
+  "input_preferred_name": "Primary Microphone",
+  "input_fallback_id": "",
+  "input_fallback_name": "Fallback Microphone",
+  "output_preferred_id": "",
+  "output_preferred_name": "Primary Speaker",
+  "output_fallback_id": "",
+  "output_fallback_name": "Fallback Speaker",
+  "recording_output_path": "recordings/last_capture.wav",
+  "recording_delete_after_playback": false,
+  "stream_sample_rate": 48000,
+  "stream_channels": 2,
+  "stream_strict_sync": true
+}
+
