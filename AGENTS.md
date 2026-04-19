@@ -22,7 +22,7 @@ Use GoogleTest for C++ unit tests. Mirror source paths in tests, for example `sr
 ## Commit & Pull Request Guidelines
 Write imperative commit subjects such as `Add PipeWire device enumerator` or `Implement WAV recording lifecycle`. Pull requests should describe the behavior change, list exact verification commands, note device assumptions, and include logs or screenshots when debugging UX or diagnostics output.
 
-Use `main` as the stable branch and do development on `feature/<topic>` branches. Tag releases from `main` with annotated semantic versions such as `v0.1.0`. Do not move published release tags.
+Use `main` as the tested release branch and `develop` as the active integration branch for ongoing work. Only merge `develop` to `main` after the release candidate has passed the documented build, unit test, and applicable HIL validation. Tag releases from `main` with annotated semantic versions such as `v0.1.0`. Do not move published release tags.
 
 ## Configuration, Logging, and Backends
 The public API should accept a JSON config path plus an optional writable state path. Recommended pattern: checked-in defaults in the consuming app repo, with runtime overrides outside source control. Do not hardcode device IDs in committed files. Treat backend selection as an internal abstraction and avoid backend-specific timing assumptions in the public API.

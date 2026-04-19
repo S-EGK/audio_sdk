@@ -299,8 +299,9 @@ Near-term priorities:
 
 ## Development Workflow
 
-- `main` is the stable integration branch.
-- use `feature/<topic>` branches for new work
+- `main` is the tested release branch.
+- `develop` is the active integration branch for ongoing work.
+- merge `develop` to `main` only after the release candidate passes documented build, unit test, and applicable HIL validation.
 - tag releases from `main` with annotated semantic versions such as `v0.1.0`
 
 Contributor-specific conventions live in [AGENTS.md](/home/chiefs/audio_sdk/AGENTS.md).
