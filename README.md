@@ -36,10 +36,12 @@ This repository should currently be treated as a source-built SDK, not an instal
 - `include/audio_sdk/`: public headers
 - `src/`: SDK implementation
 - `src/backends/pipewire/`: PipeWire backend
-- `examples/`: runnable demos
+- `examples/cpp/`: runnable C++ demos
+- `examples/python/`: runnable Python demos for the optional bindings
 - `tests/unit/`: default automated tests
 - `tests/hil/`: hardware-in-the-loop tests
 - `configs/`: sample config files
+- `CHANGELOG.md`: required release and change history
 - `AGENTS.md`: contributor guide
 
 ## Dependencies
@@ -53,7 +55,7 @@ Required:
 
 Optional:
 
-- Python3 development headers and `pybind11` for future Python bindings
+- Python3 development headers, `pip`, and `pybind11` for Python bindings
 
 ## Build
 
@@ -67,12 +69,48 @@ make
 ctest --output-on-failure
 ```
 
+Common CMake flags:
+
+```bash
+cmake .. \
+    -DBUILD_PYTHON_BINDINGS=true \
+    -DBUILD_EXAMPLES=true \
+    -DAUDIO_SDK_BUILD_HIL_TESTS=false
+make
+```
+
+Relevant flags:
+
+- `BUILD_PYTHON_BINDINGS`: build `_audio_sdk` and register the editable `audio_sdk` Python package during `make`.
+- `PYTHON_EXECUTABLE`: optional Python interpreter override. When omitted, CMake auto-detects the active Python 3 interpreter from `PATH`, so activated conda and venv environments are used automatically.
+- `BUILD_EXAMPLES`: build C++ example executables as part of `make`.
+- `AUDIO_SDK_BUILD_HIL_TESTS`: include hardware-in-the-loop tests.
+
+To use a conda or venv Python, activate the environment before configuring:
+
+```bash
+conda activate audio-sdk
+# or: source .venv/bin/activate
+mkdir build
+cd build
+cmake .. -DBUILD_PYTHON_BINDINGS=true
+make
+```
+
+If you need to force a specific interpreter, pass an explicit override:
+
+```bash
+cmake .. -DBUILD_PYTHON_BINDINGS=true -DPYTHON_EXECUTABLE="$(which python)"
+```
+
+If an existing `build/` directory previously cached an explicit interpreter, clear it once with `cmake .. -DPYTHON_EXECUTABLE=` or recreate the build directory.
+
 Enable hardware-in-the-loop tests:
 
 ```bash
 mkdir build
 cd build
-cmake -DAUDIO_SDK_BUILD_HIL_TESTS=ON ..
+cmake -DAUDIO_SDK_BUILD_HIL_TESTS=true ..
 make
 ctest -L hil --output-on-failure
 ```
@@ -91,6 +129,8 @@ There is no install/export packaging flow yet, so source integration is the inte
 ## Public API
 
 The main entry point is `audio_sdk::AudioManager` in [include/audio_sdk/audio_manager.h](/home/chiefs/audio_sdk/include/audio_sdk/audio_manager.h:21).
+
+Device IDs returned by `EnumerateDevices()` are SDK-managed short identifiers such as `in-12ab34cd56` or `out-12ab34cd56`. The PipeWire backend derives them from stable device properties when available, so normal hardware IDs should remain stable across reboot. If a backend cannot see stable device properties for a virtual or unusual node, that device may still fall back to a boot-local identity.
 
 Core operations:
 
@@ -265,23 +305,56 @@ That last point is the main remaining gap before a stronger robotics-grade recov
 
 ## Examples and Validation
 
-Run the demo:
+Build with examples enabled:
 
 ```bash
 mkdir build
 cd build
-cmake ..
-make audio_sdk_record_playback_demo
-./audio_sdk_record_playback_demo
+cmake -DBUILD_EXAMPLES=true ..
+make
 ```
+
+Run individual C++ examples from `build/`, for example:
+
+```bash
+./audio_sdk_example_enumerate_devices
+./audio_sdk_example_recording
+./audio_sdk_example_sessions
+```
+
+Build the optional Python module when Python development headers, `pip`, and `pybind11` are installed:
+
+```bash
+mkdir build
+cd build
+cmake -DBUILD_PYTHON_BINDINGS=true ..
+make
+```
+
+By default, CMake uses the active Python 3 interpreter from `PATH`. Activate a conda or venv environment before running `cmake` when the package should be registered into that environment.
+
+After `make`, the package can be imported from any working directory:
+
+```bash
+python3 -c "import audio_sdk; print(audio_sdk.__version__)"
+```
+
+Run Python examples from the repository root, for example:
+
+```bash
+python3 -m examples.python.01_enumerate_devices
+python3 -m examples.python.07_sessions
+```
+
+See [examples/README.md](/home/chiefs/audio_sdk/examples/README.md) for the full example list.
 
 Run the host HIL test:
 
 ```bash
 mkdir build
 cd build
-cmake -DAUDIO_SDK_BUILD_HIL_TESTS=ON ..
-make audio_sdk_hil_record_playback
+cmake -DAUDIO_SDK_BUILD_HIL_TESTS=true ..
+make
 ./audio_sdk_hil_record_playback
 ```
 
@@ -301,6 +374,7 @@ Near-term priorities:
 
 - `main` is the tested release branch.
 - `develop` is the active integration branch for ongoing work.
+- every change must update [CHANGELOG.md](/home/chiefs/audio_sdk/CHANGELOG.md) with detailed behavior and integration notes.
 - merge `develop` to `main` only after the release candidate passes documented build, unit test, and applicable HIL validation.
 - tag releases from `main` with annotated semantic versions such as `v0.1.0`
 
