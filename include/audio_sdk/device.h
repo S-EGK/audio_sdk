@@ -10,6 +10,8 @@ enum class DeviceDirection {
 };
 
 struct DeviceDescriptor {
+    // Stable SDK identifier when the backend exposes stable device properties.
+    // PipeWire currently uses short ids such as "in-12ab34cd56" and "out-12ab34cd56".
     std::string id;
     std::string name;
     DeviceDirection direction = DeviceDirection::kInput;
@@ -18,4 +20,3 @@ struct DeviceDescriptor {
 };
 
 }  // namespace audio_sdk
-

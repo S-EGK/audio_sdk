@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -35,6 +36,13 @@ std::once_flag g_pipewire_init_once;
 constexpr std::uint16_t kWavPcmFormat = 1;
 constexpr std::uint16_t kWavBitsPerSample = 16;
 constexpr std::uint16_t kBytesPerSample = kWavBitsPerSample / 8;
+constexpr std::uint64_t kFnvOffsetBasis = 14695981039346656037ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+
+struct PipeWireDeviceRecord {
+    DeviceDescriptor descriptor;
+    std::string target_object;
+};
 
 bool IsAudioNode(const char* media_class) {
     return media_class != nullptr &&
@@ -78,26 +86,86 @@ std::string BuildDeviceName(const struct spa_dict* props, uint32_t global_id) {
     return FallbackNodeId(global_id);
 }
 
-bool MakeDeviceDescriptor(uint32_t global_id, const struct spa_dict* props, DeviceDescriptor& device) {
+void AppendIdentityProperty(
+    const struct spa_dict* props,
+    const char* key,
+    std::ostringstream& identity,
+    bool& has_stable_property) {
+    const std::string value = LookupProperty(props, key);
+    if (value.empty()) {
+        return;
+    }
+
+    identity << key << '=' << value << '\n';
+    has_stable_property = true;
+}
+
+std::string BuildStableIdentity(
+    const struct spa_dict* props,
+    uint32_t global_id,
+    DeviceDirection direction) {
+    std::ostringstream identity;
+    identity << "direction=" << (direction == DeviceDirection::kInput ? "input" : "output") << '\n';
+
+    bool has_stable_property = false;
+    AppendIdentityProperty(props, PW_KEY_DEVICE_SERIAL, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_DEVICE_BUS_PATH, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_DEVICE_NAME, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_DEVICE_STRING, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_DEVICE_VENDOR_ID, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_DEVICE_PRODUCT_ID, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_OBJECT_PATH, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_NODE_NAME, identity, has_stable_property);
+    AppendIdentityProperty(props, PW_KEY_NODE_DESCRIPTION, identity, has_stable_property);
+    AppendIdentityProperty(props, "api.alsa.path", identity, has_stable_property);
+    AppendIdentityProperty(props, "api.alsa.card.name", identity, has_stable_property);
+    AppendIdentityProperty(props, "api.alsa.pcm.device", identity, has_stable_property);
+    AppendIdentityProperty(props, "api.alsa.pcm.name", identity, has_stable_property);
+
+    if (!has_stable_property) {
+        identity << "pipewire_global_id=" << global_id << '\n';
+    }
+    return identity.str();
+}
+
+std::string ShortDeviceId(DeviceDirection direction, const std::string& identity) {
+    std::uint64_t hash = kFnvOffsetBasis;
+    for (const unsigned char ch : identity) {
+        hash ^= ch;
+        hash *= kFnvPrime;
+    }
+
+    std::ostringstream stream;
+    stream << (direction == DeviceDirection::kInput ? "in-" : "out-")
+           << std::hex << std::nouppercase << std::setfill('0') << std::setw(10)
+           << (hash & 0xffffffffffull);
+    return stream.str();
+}
+
+bool MakeDeviceRecord(uint32_t global_id, const struct spa_dict* props, PipeWireDeviceRecord& record) {
     const char* media_class = props == nullptr ? nullptr : spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
     if (!IsAudioNode(media_class)) {
         return false;
     }
 
+    const DeviceDirection direction = DirectionFromMediaClass(media_class);
     const std::string node_name = LookupProperty(props, PW_KEY_NODE_NAME);
-    device.id = node_name.empty() ? FallbackNodeId(global_id) : node_name;
-    device.name = BuildDeviceName(props, global_id);
-    device.direction = DirectionFromMediaClass(media_class);
-    device.is_default = false;
-    device.available = true;
+    const std::string identity = BuildStableIdentity(props, global_id, direction);
+
+    record.descriptor.id = ShortDeviceId(direction, identity);
+    record.descriptor.name = BuildDeviceName(props, global_id);
+    record.descriptor.direction = direction;
+    record.descriptor.is_default = false;
+    record.descriptor.available = true;
+    record.target_object = node_name.empty() ? FallbackNodeId(global_id) : node_name;
     return true;
 }
 
-std::vector<DeviceDescriptor> SortedDevices(const std::unordered_map<uint32_t, DeviceDescriptor>& devices) {
+std::vector<DeviceDescriptor> SortedDevices(const std::unordered_map<uint32_t, PipeWireDeviceRecord>& devices) {
     std::vector<DeviceDescriptor> results;
     results.reserve(devices.size());
     for (const auto& entry : devices) {
-        results.push_back(entry.second);
+        results.push_back(entry.second.descriptor);
     }
 
     std::sort(results.begin(), results.end(), [](const DeviceDescriptor& left, const DeviceDescriptor& right) {
@@ -385,6 +453,23 @@ class PipeWireBackend::RegistrySession {
         return results;
     }
 
+    std::string TargetObjectForDeviceId(const std::string& device_id) const {
+        if (loop_ == nullptr || device_id.empty()) {
+            return {};
+        }
+
+        pw_thread_loop_lock(loop_);
+        std::string target_object;
+        for (const auto& entry : devices_) {
+            if (entry.second.descriptor.id == device_id) {
+                target_object = entry.second.target_object;
+                break;
+            }
+        }
+        pw_thread_loop_unlock(loop_);
+        return target_object;
+    }
+
     void Disconnect() {
         if (loop_ == nullptr) {
             return;
@@ -488,17 +573,20 @@ class PipeWireBackend::RegistrySession {
             return;
         }
 
-        DeviceDescriptor device;
-        if (!MakeDeviceDescriptor(id, props, device)) {
+        PipeWireDeviceRecord record;
+        if (!MakeDeviceRecord(id, props, record)) {
             return;
         }
 
-        self->devices_[id] = device;
+        self->devices_[id] = record;
         if (!self->initial_sync_complete_ || !self->emit_device_events_ || !self->callback_) {
             return;
         }
 
-        self->callback_(PipeWireDeviceEvent{EventType::kDeviceAdded, device, SortedDevices(self->devices_)});
+        self->callback_(PipeWireDeviceEvent{
+            EventType::kDeviceAdded,
+            record.descriptor,
+            SortedDevices(self->devices_)});
     }
 
     static void OnRegistryGlobalRemove(void* data, uint32_t id) {
@@ -508,7 +596,7 @@ class PipeWireBackend::RegistrySession {
             return;
         }
 
-        const DeviceDescriptor removed_device = device->second;
+        const DeviceDescriptor removed_device = device->second.descriptor;
         self->devices_.erase(device);
 
         if (!self->initial_sync_complete_ || !self->emit_device_events_ || !self->callback_) {
@@ -526,7 +614,7 @@ class PipeWireBackend::RegistrySession {
     spa_hook registry_listener_ {};
     bool core_listener_attached_ = false;
     bool registry_listener_attached_ = false;
-    std::unordered_map<uint32_t, DeviceDescriptor> devices_;
+    std::unordered_map<uint32_t, PipeWireDeviceRecord> devices_;
     std::function<void(const PipeWireDeviceEvent&)> callback_;
     int pending_sync_seq_ = -1;
     bool initial_sync_complete_ = false;
@@ -1038,6 +1126,21 @@ std::vector<DeviceDescriptor> PipeWireBackend::EnumerateDevices() const {
     return snapshot.Devices();
 }
 
+std::string PipeWireBackend::ResolveTargetObject(const std::string& device_id) const {
+    if (device_id.empty()) {
+        return {};
+    }
+
+    if (monitor_ != nullptr) {
+        const std::string target_object = monitor_->TargetObjectForDeviceId(device_id);
+        if (!target_object.empty()) {
+            return target_object;
+        }
+    }
+
+    return device_id;
+}
+
 Status PipeWireBackend::StartMonitoring(std::function<void(const PipeWireDeviceEvent&)> callback) {
     callback_ = std::move(callback);
 
@@ -1073,7 +1176,7 @@ Status PipeWireBackend::StartRecording(const std::string& path, const std::strin
     }
 
     auto session = std::make_unique<RecordingSession>();
-    const Status status = session->Start(path, target_device_id, policy);
+    const Status status = session->Start(path, ResolveTargetObject(target_device_id), policy);
     if (!status) {
         return status;
     }
@@ -1099,7 +1202,7 @@ Status PipeWireBackend::StartPlayback(const std::string& path, const std::string
     }
 
     auto session = std::make_unique<PlaybackSession>();
-    const Status status = session->Start(path, target_device_id);
+    const Status status = session->Start(path, ResolveTargetObject(target_device_id));
     if (!status) {
         return status;
     }

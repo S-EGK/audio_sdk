@@ -41,6 +41,8 @@ class PipeWireBackend {
     class RecordingSession;
     class PlaybackSession;
 
+    std::string ResolveTargetObject(const std::string& device_id) const;
+
     std::function<void(const PipeWireDeviceEvent&)> callback_;
     RegistrySession* monitor_ = nullptr;
     RecordingSession* recorder_ = nullptr;

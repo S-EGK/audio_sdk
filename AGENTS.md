@@ -9,7 +9,9 @@ Standardize on CMake plus Make:
 - `mkdir build && cd build && cmake ..` configures the project.
 - `make` builds the C++ library, examples, and Python module from `build/`.
 - `ctest --output-on-failure` runs the default automated suite from `build/`.
-- `cmake -DAUDIO_SDK_BUILD_HIL_TESTS=ON .. && make && ctest -L hil` enables and runs local hardware tests.
+- `cmake -DBUILD_PYTHON_BINDINGS=true -DBUILD_EXAMPLES=true -DAUDIO_SDK_BUILD_HIL_TESTS=false .. && make` builds with explicit feature flags.
+- `PYTHON_EXECUTABLE` is an optional override. By default, CMake auto-detects the active Python 3 interpreter from `PATH`, so activate conda or venv environments before configuring.
+- `cmake -DAUDIO_SDK_BUILD_HIL_TESTS=true .. && make && ctest -L hil` enables and runs local hardware tests.
 
 Keep new targets wired into CMake so contributors do not rely on ad hoc shell scripts.
 
@@ -20,7 +22,7 @@ Use C++17 unless the repo later raises the minimum. Indent with 4 spaces, use Pa
 Use GoogleTest for C++ unit tests. Mirror source paths in tests, for example `src/stream/session.cpp` with `tests/unit/stream/test_session.cpp`. Add coverage for device discovery, routing policy, fallback selection, and config parsing. Reserve `tests/hil/` for mic, speaker, hot-plug, and record-stop-playback scenarios on Ubuntu 22.04.
 
 ## Commit & Pull Request Guidelines
-Write imperative commit subjects such as `Add PipeWire device enumerator` or `Implement WAV recording lifecycle`. Pull requests should describe the behavior change, list exact verification commands, note device assumptions, and include logs or screenshots when debugging UX or diagnostics output.
+Write imperative commit subjects such as `Add PipeWire device enumerator` or `Implement WAV recording lifecycle`. Every change must update `CHANGELOG.md` with detailed user-facing and developer-facing impact before it is committed. Pull requests should describe the behavior change, list exact verification commands, note device assumptions, and include logs or screenshots when debugging UX or diagnostics output.
 
 Use `main` as the tested release branch and `develop` as the active integration branch for ongoing work. Only merge `develop` to `main` after the release candidate has passed the documented build, unit test, and applicable HIL validation. Tag releases from `main` with annotated semantic versions such as `v0.1.0`. Do not move published release tags.
 
